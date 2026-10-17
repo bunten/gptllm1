@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動かして学ぶ LLMのしくみ</title>
+<style>
+  :root { --blue:#2563eb; --purple:#7c3aed; --green:#15803d; --ink:#172033; --muted:#596579; --line:#d7deea; --panel:#ffffff; --bg:#f4f7fb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family: "Yu Gothic UI", Meiryo, sans-serif; background:var(--bg); color:var(--ink); line-height:1.6; }
+  header { padding:24px 18px 18px; text-align:center; background:#eaf1ff; border-bottom:1px solid #d5e2ff; }
+  h1 { margin:0 0 6px; font-size:clamp(1.5rem,4vw,2.2rem); }
+  header p { margin:0; color:#35445f; }
+  main { max-width:1100px; margin:0 auto; padding:18px; }
+  .toolbar, .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:16px; box-shadow:0 3px 12px #1d35570a; }
+  .inputrow { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+  label { display:block; font-weight:700; margin-bottom:5px; }
+  input { font:inherit; padding:10px 12px; border:1px solid #aebbd0; border-radius:8px; min-width:240px; flex:1; }
+  button { font:inherit; border:0; border-radius:9px; padding:10px 15px; background:var(--blue); color:white; cursor:pointer; font-weight:700; }
+  button:hover { filter:brightness(.94); }
+  button:focus-visible, input:focus-visible { outline:3px solid #93c5fd; outline-offset:2px; }
+  button.secondary { background:#e8edf5; color:#24324a; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .controls { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .progress { display:flex; justify-content:space-between; gap:10px; font-weight:700; margin-bottom:8px; }
+  .bar { height:9px; border-radius:20px; background:#e4e9f2; overflow:hidden; }
+  .barfill { width:0%; height:100%; background:linear-gradient(90deg,#2563eb,#8b5cf6); transition:width .35s; }
+  .diagram-wrap { overflow-x:auto; }
+  svg { width:100%; min-width:680px; height:auto; display:block; }
+  .stage { fill:#fff; stroke:#c8d3e4; stroke-width:2; transition:stroke .2s, fill .2s; }
+  .stage.active { fill:#edf4ff; stroke:#2563eb; stroke-width:3; }
+  .stage.done { fill:#ecfdf3; stroke:#22a06b; }
+  .stage-title { font-size:16px; font-weight:700; fill:#172033; text-anchor:middle; }
+  .stage-sub { font-size:12px; fill:#526078; text-anchor:middle; }
+  .arrow { stroke:#9aa9bf; stroke-width:3; fill:none; marker-end:url(#arrowhead); }
+  .arrow.active { stroke:#7c3aed; stroke-width:4; }
+  .token { fill:#dbeafe; stroke:#2563eb; stroke-width:1.5; }
+  .token-text { font-size:13px; font-weight:700; fill:#1e40af; text-anchor:middle; dominant-baseline:middle; }
+  .explain-grid { display:grid; grid-template-columns:1.2fr 1fr; gap:16px; }
+  .step-label { color:var(--blue); font-weight:800; font-size:.9rem; }
+  h2 { margin:0 0 8px; font-size:1.25rem; }
+  .explain { min-height:130px; }
+  .explain p { margin:6px 0; }
+  .note { background:#fff8e6; border:1px solid #f4d58b; border-radius:10px; padding:12px; color:#614a16; font-size:.92rem; }
+  .prediction { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .candidate { background:#f1f5f9; color:#24324a; border:1px solid #cbd5e1; }
+  .candidate.chosen { background:#dcfce7; border-color:#22a06b; color:#14532d; }
+  .small { color:var(--muted); font-size:.92rem; }
+  footer { text-align:center; color:var(--muted); font-size:.85rem; padding:0 18px 24px; }
+  @media (max-width:700px) { main { padding:12px; } .explain-grid { grid-template-columns:1fr; } .toolbar,.panel { padding:12px; } input { min-width:100%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>動かして学ぶ：LLMのしくみ</h1>
+  <p>文章がAIの中で処理され、次の言葉が予測される流れを体験しよう</p>
+</header>
+<main>
+  <section class="toolbar">
+    <div class="inputrow">
+      <div style="flex:1;min-width:240px">
+        <label for="prompt">AIに入力する文章</label>
+        <input id="prompt" value="今日はよい天気なので" maxlength="60">
+      </div>
+      <button id="apply">文章をセット</button>
+    </div>
+    <div class="controls">
+      <button id="back" class="secondary">← 前へ</button>
+      <button id="next">次の段階へ →</button>
+      <button id="play" class="secondary">▶ 自動再生</button>
+      <button id="reset" class="secondary">↺ 最初から</button>
+    </div>
+    <p class="small">操作のヒント：まず「次の段階へ」を押して、図と説明がどう変わるか見てみましょう。</p>
+  </section>
+
+  <section class="panel">
+    <div class="progress"><span id="progressText">段階 1 / 6</span><span id="progressName">文章を入力</span></div>
+    <div class="bar"><div class="barfill" id="barfill"></div></div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 960 340" role="img" aria-label="LLMの処理の流れを示す図">
+        <defs>
+          <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa9bf"/></marker>
+        </defs>
+        <path class="arrow" id="a0" d="M155 110 L185 110"/>
+        <path class="arrow" id="a1" d="M305 110 L335 110"/>
+        <path class="arrow" id="a2" d="M455 110 L485 110"/>
+        <path class="arrow" id="a3" d="M605 110 L635 110"/>
+        <path class="arrow" id="a4" d="M755 110 L785 110"/>
+        <g id="s0">
+          <rect class="stage" x="15" y="65" width="140" height="90" rx="14"/>
+          <text class="stage-title" x="85" y="96">① 入力文章</text>
+          <text class="stage-sub" x="85" y="120">人の言葉</text>
+          <text class="stage-sub" x="85" y="139">プロンプト</text>
+        </g>
+        <g id="s1">
+          <rect class="stage" x="185" y="65" width="120" height="90" rx="14"/>
+          <text class="stage-title" x="245" y="96">② トークン化</text>
+          <text class="stage-sub" x="245" y="120">小さな単位</text>
+          <text class="stage-sub" x="245" y="139">に分ける</text>
+        </g>
+        <g id="s2">
+          <rect class="stage" x="335" y="65" width="120" height="90" rx="14"/>
+          <text class="stage-title" x="395" y="96">③ 数値に変換</text>
+          <text class="stage-sub" x="395" y="120">埋め込み</text>
+          <text class="stage-sub" x="395" y="139">位置情報</text>
+        </g>
+        <g id="s3">
+          <rect class="stage" x="485" y="65" width="120" height="90" rx="14"/>
+          <text class="stage-title" x="545" y="96">④ Attention</text>
+          <text class="stage-sub" x="545" y="120">言葉の関係</text>
+          <text class="stage-sub" x="545" y="139">に注目</text>
+        </g>
+        <g id="s4">
+          <rect class="stage" x="635" y="65" width="120" height="90" rx="14"/>
+          <text class="stage-title" x="695" y="96">⑤ 層で計算</text>
+          <text class="stage-sub" x="695" y="120">何度も処理</text>
+          <text class="stage-sub" x="695" y="139">Transformer</text>
+        </g>
+        <g id="s5">
+          <rect class="stage" x="785" y="65" width="160" height="90" rx="14"/>
+          <text class="stage-title" x="865" y="96">⑥ 次を予測</text>
+          <text class="stage-sub" x="865" y="120">候補の確率</text>
+          <text class="stage-sub" x="865" y="139">から選ぶ</text>
+        </g>
+        <text x="20" y="205" font-size="14" font-weight="700" fill="#526078">今の段階で見えるイメージ</text>
+        <g id="visual"></g>
+        <g id="movingToken">
+          <rect class="token" x="0" y="0" width="110" height="34" rx="10"/>
+          <text class="token-text" id="movingText" x="55" y="17">文章</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section class="explain-grid">
+    <div class="panel explain">
+      <div class="step-label" id="stepLabel">STAGE 1</div>
+      <h2 id="exTitle">① 文章を入力する</h2>
+      <p id="exText">人がAIに質問やお願いを入力します。この入力文を「プロンプト」と呼びます。</p>
+      <p id="exExample" class="small">例：「今日はよい天気なので」</p>
+    </div>
+    <div class="panel">
+      <h2>この教材で覚えたいこと</h2>
+      <p id="keyPoint">LLMは、入力された文章をもとに続きを予測します。</p>
+      <div id="predictionArea"></div>
+    </div>
+  </section>
+
+  <div class="note">
+    <strong>大事なポイント：</strong>このページはLLMのしくみを学ぶための模型です。本物のChatGPTを動かしているわけではありません。また、実際のトークンの分け方や内部計算は、この図よりずっと複雑です。
+  </div>
+</main>
+<footer>HTML・CSS・SVG・JavaScriptのみで動作します。インターネット接続や外部ライブラリは不要です。</footer>
+
+<script>
+const stages = [
+  {
+    title:"① 文章を入力する",
+    name:"文章を入力",
+    text:"人がAIに質問やお願いを入力します。この入力文を「プロンプト」と呼びます。",
+    example:"例：入力した文章が、これから処理されます。",
+    key:"LLMは、入力された文章をもとに続きを予測します。",
+    visual:"input"
+  },
+  {
+    title:"② トークンに分ける",
+    name:"トークン化",
+    text:"文章を、モデルが扱える小さな単位（トークン）に分けます。トークンは単語まるごととは限らず、文字の一部になることもあります。",
+    example:"学習用の簡単な例：「今日は」「よい」「天気」「なので」",
+    key:"トークンは、LLMが文章を扱うときの小さな単位です。",
+    visual:"tokens"
+  },
+  {
+    title:"③ 数値の並びに変換する",
+    name:"数値に変換",
+    text:"コンピュータは言葉の意味をそのまま計算できません。そこで、各トークンを数値の並び（ベクトル）に変換します。位置情報も加えて、言葉の順序を扱えるようにします。",
+    example:"図の数字は説明用のイメージで、本物のモデルの値ではありません。",
+    key:"言葉は、計算できる数値の表現に変換されます。",
+    visual:"vectors"
+  },
+  {
+    title:"④ Attentionで関係を見る",
+    name:"Attention",
+    text:"Attention（注意機構）は、文章中のどの言葉が、ほかの言葉を理解する手がかりになるかを計算します。",
+    example:"「今日は」「天気」のような言葉同士の関係を考えるイメージです。",
+    key:"単語を一つずつ別々に見るだけでなく、文の中の関係を計算します。",
+    visual:"attention"
+  },
+  {
+    title:"⑤ 何層もの計算を通る",
+    name:"Transformerの層",
+    text:"Transformerには、Attentionや別の計算を組み合わせた層があり、情報を何度も更新します。大きな言語モデルには、このような計算が多数積み重なっています。",
+    example:"図では、処理が何段階も続く様子を簡略化しています。",
+    key:"LLMは、たくさんの数値計算を組み合わせて次の予測に必要な情報を作ります。",
+    visual:"layers"
+  },
+  {
+    title:"⑥ 次のトークンを予測する",
+    name:"次を予測",
+    text:"最後に、次に続きそうなトークンの候補ごとにスコアや確率を計算します。実際の文章生成では、設定などに応じて候補が選ばれます。",
+    example:"「今日はよい天気なので」→「散歩」「外」「出かけよう」などが続くかもしれません。",
+    key:"LLMは文章全体を一度に完成させるのではなく、基本的には次のトークンを順番に予測して文章を作ります。",
+    visual:"prediction"
+  }
+];
+let current = 0;
+let timer = null;
+const $ = id => document.getElementById(id);
+
+function escapeXml(s) {
+  return s.replace(/[<>&'"]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;","'":"&apos;",'"':"&quot;"}[c]));
+}
+function splitForDemo(text) {
+  const cleaned = text.trim() || "今日はよい天気なので";
+  // 学習用の分割。実際のLLMのトークナイザーとは異なる。
+  return cleaned.match(/[\u3040-\u30ffー]+|[\u4e00-\u9fff]+|[A-Za-z0-9]+|[^\s]/g) || [cleaned];
+}
+function svgEl(tag, attrs, content="") {
+  const a = Object.entries(attrs).map(([k,v]) => `${k}="${String(v).replace(/"/g,"&quot;")}"`).join(" ");
+  return `<${tag} ${a}>${content}</${tag}>`;
+}
+function renderVisual(stageIndex) {
+  const target = $("visual");
+  const input = $("prompt").value.trim() || "今日はよい天気なので";
+  const tokens = splitForDemo(input).slice(0,8);
+  let out = "";
+  if (stageIndex === 0) {
+    out += `<rect x="40" y="230" width="880" height="65" rx="12" fill="#eff6ff" stroke="#93c5fd"/>`;
+    out += `<text x="480" y="257" font-size="17" text-anchor="middle" font-weight="700" fill="#1e40af">${escapeXml(input.slice(0,48))}</text>`;
+    out += `<text x="480" y="280" font-size="12" text-anchor="middle" fill="#475569">人が入力した文章</text>`;
+  } else if (stageIndex === 1) {
+    tokens.forEach((t,i) => {
+      const x = 35 + (i%4)*225, y = 228 + Math.floor(i/4)*55;
+      out += `<rect x="${x}" y="${y}" width="195" height="38" rx="9" fill="#dbeafe" stroke="#60a5fa"/>`;
+      out += `<text x="${x+97.5}" y="${y+24}" text-anchor="middle" font-size="15" font-weight="700" fill="#1d4ed8">${escapeXml(t)}</text>`;
+    });
+  } else if (stageIndex === 2) {
+    tokens.slice(0,6).forEach((t,i) => {
+      const x = 55 + i*145;
+      out += `<rect x="${x}" y="225" width="118" height="64" rx="8" fill="#f3e8ff" stroke="#a78bfa"/>`;
+      out += `<text x="${x+59}" y="246" text-anchor="middle" font-size="12" fill="#6d28d9">${escapeXml(t)}</text>`;
+      out += `<text x="${x+59}" y="270" text-anchor="middle" font-size="12" font-weight="700" fill="#4c1d95">[0.2, -0.5…]</text>`;
+    });
+  } else if (stageIndex === 3) {
+    const labels = tokens.slice(0,5);
+    labels.forEach((t,i) => {
+      const x = 100 + i*190, y = i%2===0 ? 238 : 280;
+      out += `<circle cx="${x}" cy="${y}" r="22" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>`;
+      out += `<text x="${x}" y="${y+4}" text-anchor="middle" font-size="11" fill="#5b21b6">${escapeXml(t.slice(0,6))}</text>`;
+    });
+    out += `<path d="M100 238 Q285 180 290 280 M290 280 Q470 190 480 238 M480 238 Q665 180 670 280 M290 280 Q670 210 860 238" stroke="#8b5cf6" stroke-width="2.5" fill="none" opacity=".8"/>`;
+    out += `<text x="480" y="322" text-anchor="middle" font-size="12" fill="#5b21b6">線の太さは、関係の強さをイメージしたもの</text>`;
+  } else if (stageIndex === 4) {
+    for (let i=0;i<4;i++) {
+      const x = 75+i*220;
+      out += `<rect x="${x}" y="228" width="165" height="65" rx="10" fill="${i%2===0?"#dbeafe":"#ede9fe"}" stroke="${i%2===0?"#60a5fa":"#a78bfa"}" stroke-width="2"/>`;
+      out += `<text x="${x+82.5}" y="254" text-anchor="middle" font-size="14" font-weight="700" fill="#263858">計算の層 ${i+1}</text>`;
+      out += `<text x="${x+82.5}" y="276" text-anchor="middle" font-size="11" fill="#526078">情報を更新</text>`;
+      if (i<3) out += `<path d="M${x+165} 260 L${x+210} 260" stroke="#64748b" stroke-width="3" fill="none" marker-end="url(#arrowhead)"/>`;
+    }
+  } else {
+    const choices = [
+      {word:"散歩",p:0.46},
+      {word:"外",p:0.31},
+      {word:"出かけよう",p:0.23}
+    ];
+    choices.forEach((c,i) => {
+      const x = 100+i*260, h = c.p*105;
+      out += `<rect x="${x}" y="${285-h}" width="150" height="${h}" rx="8" fill="${i===0?"#86efac":"#bfdbfe"}" stroke="${i===0?"#16a34a":"#60a5fa"}"/>`;
+      out += `<text x="${x+75}" y="307" text-anchor="middle" font-size="15" font-weight="700" fill="#334155">${c.word}</text>`;
+      out += `<text x="${x+75}" y="${270-h}" text-anchor="middle" font-size="13" fill="#334155">${Math.round(c.p*100)}%</text>`;
+    });
+    out += `<text x="480" y="330" text-anchor="middle" font-size="11" fill="#64748b">確率は説明用の架空の例</text>`;
+  }
+  target.innerHTML = out;
+}
+function update() {
+  const stage = stages[current];
+  $("progressText").textContent = `段階 ${current+1} / ${stages.length}`;
+  $("progressName").textContent = stage.name;
+  $("barfill").style.width = `${((current+1)/stages.length)*100}%`;
+  $("stepLabel").textContent = `STAGE ${current+1}`;
+  $("exTitle").textContent = stage.title;
+  $("exText").textContent = stage.text;
+  $("exExample").textContent = stage.example;
+  $("keyPoint").textContent = stage.key;
+  $("back").disabled = current===0;
+  $("next").disabled = current===stages.length-1;
+  for (let i=0;i<stages.length;i++) {
+    const rect = document.querySelector(`#s${i} .stage`);
+    rect.classList.toggle("active", i===current);
+    rect.classList.toggle("done", i<current);
+    if (i<5) document.getElementById(`a${i}`).classList.toggle("active", i<current);
+  }
+  renderVisual(current);
+  const centers = [85,245,395,545,695,865];
+  const token = $("movingToken");
+  token.style.display = "block";
+  token.setAttribute("transform",`translate(${centers[current]-55}, 12)`);
+  $("movingText").textContent = current===0 ? "入力文" : current===1 ? "トークン" : current===2 ? "数値" : current===3 ? "関係" : current===4 ? "計算" : "予測";
+  if (current===5) {
+    $("predictionArea").innerHTML = `<p class="small">続きの候補（例）</p><div class="prediction"><button class="candidate" data-word="散歩">散歩</button><button class="candidate" data-word="外">外</button><button class="candidate" data-word="出かけよう">出かけよう</button></div><p id="picked" class="small">候補を押すと、文章の続きを試せます。</p>`;
+    document.querySelectorAll(".candidate").forEach(btn => btn.addEventListener("click", () => {
+      document.querySelectorAll(".candidate").forEach(b=>b.classList.remove("chosen"));
+      btn.classList.add("chosen");
+      $("picked").textContent = `選んだ続き：「${$("prompt").value}${btn.dataset.word}」`;
+    }));
+  } else {
+    $("predictionArea").innerHTML = `<p class="small">段階を進めると、ここにその処理のポイントが表示されます。</p>`;
+  }
+}
+function stopTimer() {
+  if (timer) clearInterval(timer);
+  timer = null;
+  $("play").textContent = "▶ 自動再生";
+}
+$("next").addEventListener("click", () => { stopTimer(); if(current<stages.length-1){current++;update();} });
+$("back").addEventListener("click", () => { stopTimer(); if(current>0){current--;update();} });
+$("reset").addEventListener("click", () => { stopTimer(); current=0; update(); });
+$("apply").addEventListener("click", () => { stopTimer(); current=0; update(); });
+$("prompt").addEventListener("keydown", e => { if(e.key==="Enter"){stopTimer();current=0;update();} });
+$("play").addEventListener("click", () => {
+  if(timer){stopTimer();return;}
+  if(current===stages.length-1) current=0;
+  $("play").textContent = "⏸ 一時停止";
+  timer=setInterval(() => {
+    if(current>=stages.length-1){stopTimer();return;}
+    current++; update();
+  }, 2400);
+});
+update();
+</script>
+</body>
+</html>
